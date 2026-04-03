@@ -1,0 +1,13 @@
+node_modules
+dist
+.DS_Store
+server/public
+vite.config.ts.*
+*.tar.gz
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.local
+.env.production
+.claude/
