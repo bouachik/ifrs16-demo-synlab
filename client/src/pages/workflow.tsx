@@ -582,73 +582,190 @@ function Step1({ lease, setLease, onNext, addAudit }: { lease: LeaseData | null;
 // STEP 2 — Classification
 // ═══════════════════════════════════════
 
-function Step2({ lease, onNext, addAudit }: { lease: LeaseData; onNext: () => void; addAudit: (e: Omit<AuditEntry, "utilisateur" | "timestamp">) => void }) {
+function Step2({ lease, onNext, onExclude, addAudit }: {
+  lease: LeaseData;
+  onNext: () => void;
+  onExclude: () => void;
+  addAudit: (e: Omit<AuditEntry, "utilisateur" | "timestamp">) => void;
+}) {
+  const [userDecision, setUserDecision] = useState<"eligible" | "excluded" | null>(null);
   const confiance = lease.classificationConfiance;
+
+  // IFRS 16 is binary — either certain (≥95) or needs human qualification
+  const isAutoCertain = confiance >= 95;
+  const status: "eligible" | "excluded" | "pending" =
+    isAutoCertain ? "eligible" :
+    userDecision === "eligible" ? "eligible" :
+    userDecision === "excluded" ? "excluded" :
+    "pending";
+
   const criteria = [
-    { label: "Actif identifié", result: true, detail: `Les locaux situés au ${lease.adresse} constituent un actif clairement identifié dans le contrat.` },
-    { label: "Droit d'utilisation", result: true, detail: `Le preneur (${lease.preneur}) a le droit de contrôler l'utilisation de l'actif pendant la durée du bail.` },
-    { label: "Contrepartie", result: true, detail: `Un loyer de ${fmtEur(lease.loyerAnnuelHT)}/an constitue la contrepartie du droit d'utilisation.` },
+    {
+      label: "Actif identifié",
+      reference: "IFRS 16.B13-B20",
+      detail: `Les locaux situés au ${lease.adresse} constituent un actif clairement identifié dans le contrat.`,
+    },
+    {
+      label: "Droit d'utilisation",
+      reference: "IFRS 16.B9-B11",
+      detail: `Le preneur (${lease.preneur}) a le droit de contrôler l'utilisation de l'actif pendant la durée du bail.`,
+    },
+    {
+      label: "Contrepartie",
+      reference: "IFRS 16.9(b)",
+      detail: `Un loyer de ${fmtEur(lease.loyerAnnuelHT)}/an constitue la contrepartie du droit d'utilisation.`,
+    },
   ];
+
+  // Pull classification-related alerts from Claude output
+  const classifAlertes = (lease.alertes ?? []).filter(a =>
+    /classif|scope|identif|actif|droit.util|contrepart|substitu/i.test(a.description + a.titre)
+  );
+
+  const handleConfirmEligible = () => {
+    setUserDecision("eligible");
+    addAudit({ etape: "Étape 2", action: "Qualification manuelle", detail: "Utilisateur a confirmé l'éligibilité IFRS 16 malgré une confiance < 95%" });
+  };
+
+  const handleExclude = () => {
+    setUserDecision("excluded");
+    addAudit({ etape: "Étape 2", action: "Qualification manuelle", detail: "Utilisateur a exclu le contrat du scope IFRS 16" });
+  };
 
   return (
     <div className="space-y-5">
-      <AgentPanel step={2} summary={`L'agent de classification a vérifié les trois critères d'identification d'un contrat de location selon la norme IFRS 16 (paragraphe 9) : un actif identifié existe (locaux au ${lease.adresse}), le preneur contrôle l'utilisation de l'actif, et une contrepartie est prévue (loyer de ${fmtEur(lease.loyerAnnuelHT)}/an). Conclusion : le contrat est éligible au traitement IFRS 16 avec un niveau de confiance de ${confiance}%. Les exemptions de courte durée et de faible valeur ne s'appliquent pas (durée > 12 mois, valeur de l'actif > 5 000 USD).`} />
+      <AgentPanel step={2} summary={
+        isAutoCertain
+          ? `L'agent a vérifié les trois critères IFRS 16.9 : actif identifié (${lease.adresse}), droit d'utilisation contrôlé par ${lease.preneur}, contrepartie de ${fmtEur(lease.loyerAnnuelHT)}/an. Les trois critères sont remplis. Le contrat est éligible IFRS 16. Exemptions court terme et faible valeur non applicables.`
+          : `L'agent a analysé les critères IFRS 16.9 mais ne peut pas conclure avec certitude (confiance : ${confiance}%). Une ou plusieurs ambiguïtés ont été détectées. Une décision manuelle est requise pour qualifier ou exclure ce contrat.`
+      } />
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card className="md:col-span-1 border-green-200">
-          <CardContent className="p-6 text-center">
-            <div className="relative w-24 h-24 mx-auto mb-3">
-              <svg viewBox="0 0 100 100" className="w-full h-full -rotate-90">
-                <circle cx="50" cy="50" r="42" stroke="#e5e7eb" strokeWidth="8" fill="none" />
-                <circle cx="50" cy="50" r="42" stroke="#16a34a" strokeWidth="8" fill="none"
-                  strokeDasharray={`${confiance * 2.64} 264`} strokeLinecap="round" />
-              </svg>
-              <div className="absolute inset-0 flex items-center justify-center">
-                <span className="text-2xl font-bold text-green-700">{confiance}%</span>
+      {/* Status banner */}
+      <AnimatePresence mode="wait">
+        {status === "eligible" && (
+          <motion.div key="eligible"
+            initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+            className="flex items-center gap-3 p-4 rounded-xl bg-green-50 border border-green-200"
+          >
+            <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0">
+              <CheckCircle2 className="h-6 w-6 text-green-600" />
+            </div>
+            <div>
+              <p className="text-sm font-bold text-green-800">Éligible IFRS 16</p>
+              <p className="text-xs text-green-700 mt-0.5">
+                {isAutoCertain
+                  ? `Les 3 critères sont remplis avec certitude — traitement IFRS 16 applicable.`
+                  : `Qualification confirmée manuellement par le comptable.`}
+              </p>
+            </div>
+            {!isAutoCertain && (
+              <Badge className="ml-auto text-[10px] bg-amber-100 text-amber-700 border-amber-200">Décision manuelle</Badge>
+            )}
+          </motion.div>
+        )}
+
+        {status === "excluded" && (
+          <motion.div key="excluded"
+            initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+            className="flex items-center gap-3 p-4 rounded-xl bg-red-50 border border-red-200"
+          >
+            <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+              <AlertCircle className="h-6 w-6 text-red-600" />
+            </div>
+            <div>
+              <p className="text-sm font-bold text-red-800">Hors scope IFRS 16</p>
+              <p className="text-xs text-red-700 mt-0.5">Ce contrat a été exclu du traitement IFRS 16 suite à une décision manuelle.</p>
+            </div>
+          </motion.div>
+        )}
+
+        {status === "pending" && (
+          <motion.div key="pending"
+            initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+            className="p-4 rounded-xl bg-amber-50 border border-amber-200"
+          >
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+                <AlertTriangle className="h-5 w-5 text-amber-600" />
+              </div>
+              <div className="flex-1">
+                <p className="text-sm font-bold text-amber-800">Qualification manuelle requise</p>
+                <p className="text-sm text-amber-700 mt-1">
+                  L'agent n'a pas pu conclure avec certitude (confiance : <strong>{confiance}%</strong>).
+                  IFRS 16 est binaire — il n'y a pas d'entre-deux. Vous devez qualifier ce contrat.
+                </p>
+                {classifAlertes.length > 0 && (
+                  <div className="mt-3 space-y-2">
+                    <p className="text-xs font-semibold text-amber-800 uppercase tracking-wide">Points d'ambiguïté détectés</p>
+                    {classifAlertes.map((a, i) => (
+                      <div key={i} className="flex items-start gap-2 text-xs text-amber-800 bg-amber-100/60 rounded-lg p-2.5">
+                        <AlertCircle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5 text-amber-600" />
+                        <span><strong>{a.titre}</strong> — {a.description}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="flex gap-3 mt-4">
+                  <Button onClick={handleConfirmEligible} className="bg-green-600 hover:bg-green-700 text-white gap-2 text-sm">
+                    <CheckCircle2 className="h-4 w-4" /> Confirmer IFRS 16
+                  </Button>
+                  <Button onClick={handleExclude} variant="outline" className="border-red-300 text-red-700 hover:bg-red-50 gap-2 text-sm">
+                    <AlertCircle className="h-4 w-4" /> Exclure du scope
+                  </Button>
+                </div>
               </div>
             </div>
-            <p className="text-sm font-semibold text-green-800">Éligible IFRS 16</p>
-            <p className="text-xs text-gray-500 mt-1">{lease.typeBail}</p>
-          </CardContent>
-        </Card>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-        <div className="md:col-span-3 space-y-3">
-          {criteria.map((c, i) => (
-            <Card key={i} className="border-gray-200">
-              <CardContent className="p-4 flex items-start gap-3">
-                <div className={cn("w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5", c.result ? "bg-green-100" : "bg-red-100")}>
-                  {c.result ? <Check className="h-4 w-4 text-green-600" /> : <AlertCircle className="h-4 w-4 text-red-600" />}
+      {/* Criteria cards */}
+      <div className="space-y-3">
+        {criteria.map((c, i) => (
+          <Card key={i} className="border-gray-200">
+            <CardContent className="p-4 flex items-start gap-3">
+              <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+                <Check className="h-4 w-4 text-green-600" />
+              </div>
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-semibold text-gray-900">{c.label}</span>
+                  <Badge className="text-[10px] bg-green-100 text-green-700 border-green-200">Oui</Badge>
+                  <span className="text-[10px] text-gray-400 ml-auto">{c.reference}</span>
                 </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-semibold text-gray-900">{c.label}</span>
-                    <Badge className={cn("text-[10px]", c.result ? "bg-green-100 text-green-700 border-green-200" : "bg-red-100 text-red-700 border-red-200")}>{c.result ? "Oui" : "Non"}</Badge>
-                  </div>
-                  <p className="text-sm text-gray-600 mt-1">{c.detail}</p>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+                <p className="text-sm text-gray-600 mt-1">{c.detail}</p>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
       </div>
 
+      {/* Exemptions */}
       <Card className="border-gray-200 bg-gray-50/50">
         <CardContent className="p-4">
           <div className="flex items-center gap-2 mb-2">
             <Info className="h-4 w-4 text-blue-500" />
             <span className="text-sm font-semibold text-gray-800">Vérification des exemptions</span>
           </div>
-          <div className="flex gap-4 text-sm text-gray-600">
-            <span>Courte durée (≤ 12 mois) : <strong className="text-gray-800">Non applicable</strong> — durée de {lease.dureeContractuelle}</span>
+          <div className="flex flex-wrap gap-4 text-sm text-gray-600">
+            <span>Courte durée (≤ 12 mois) : <strong className="text-gray-800">Non applicable</strong> — {lease.dureeContractuelle}</span>
             <span>Faible valeur (≤ 5 000 USD) : <strong className="text-gray-800">Non applicable</strong> — locaux de bureaux</span>
           </div>
         </CardContent>
       </Card>
 
-      <div className="flex justify-end">
-        <Button onClick={() => { addAudit({ etape: "Étape 2", action: "Classification validée", detail: `Éligible IFRS 16 (${lease.classificationConfiance}%)` }); onNext(); }} className="bg-blue-600 hover:bg-blue-700 text-white gap-2">
-          Passer à l'extraction <ChevronRight className="h-4 w-4" />
-        </Button>
+      {/* Actions */}
+      <div className="flex justify-end gap-3">
+        {status === "excluded" && (
+          <Button onClick={onExclude} variant="outline" className="border-red-300 text-red-700 hover:bg-red-50 gap-2">
+            <AlertCircle className="h-4 w-4" /> Fermer le dossier
+          </Button>
+        )}
+        {status === "eligible" && (
+          <Button onClick={() => { addAudit({ etape: "Étape 2", action: "Classification validée", detail: isAutoCertain ? `Éligible IFRS 16 — certitude automatique (${confiance}%)` : "Éligible IFRS 16 — confirmé manuellement" }); onNext(); }} className="bg-blue-600 hover:bg-blue-700 text-white gap-2">
+            Passer à l'extraction <ChevronRight className="h-4 w-4" />
+          </Button>
+        )}
       </div>
     </div>
   );
@@ -1479,6 +1596,7 @@ export default function WorkflowPage() {
   const [lease, setLease] = useState<LeaseData | null>(null);
   const [maxStep, setMaxStep] = useState(1);
   const [auditTrail, setAuditTrail] = useState<AuditEntry[]>([]);
+  const [horsScope, setHorsScope] = useState(false);
 
   const addAudit = useCallback((e: Omit<AuditEntry, "utilisateur" | "timestamp">) => {
     const now = new Date();
@@ -1627,7 +1745,32 @@ export default function WorkflowPage() {
           </div>
 
           {currentStep === 1 && <Step1 lease={lease} setLease={setLease} onNext={goNext} addAudit={addAudit} />}
-          {currentStep === 2 && lease && <Step2 lease={lease} onNext={goNext} addAudit={addAudit} />}
+          {currentStep === 2 && lease && !horsScope && (
+            <Step2
+              lease={lease}
+              onNext={goNext}
+              onExclude={() => setHorsScope(true)}
+              addAudit={addAudit}
+            />
+          )}
+          {currentStep === 2 && horsScope && (
+            <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+              className="flex flex-col items-center justify-center py-16 text-center space-y-4"
+            >
+              <div className="w-16 h-16 rounded-full bg-red-100 flex items-center justify-center">
+                <AlertCircle className="h-8 w-8 text-red-500" />
+              </div>
+              <h3 className="text-lg font-bold text-gray-900">Contrat exclu du scope IFRS 16</h3>
+              <p className="text-sm text-gray-500 max-w-sm">
+                Ce contrat n'a pas été qualifié comme contrat de location selon IFRS 16.9.
+                Aucun traitement comptable IFRS 16 n'est requis.
+              </p>
+              <Button variant="outline" onClick={() => { setHorsScope(false); setLease(null); setCurrentStep(1); setMaxStep(1); }}
+                className="mt-2 gap-2">
+                <Upload className="h-4 w-4" /> Analyser un nouveau bail
+              </Button>
+            </motion.div>
+          )}
           {currentStep === 3 && lease && <Step3 lease={lease} onNext={goNext} addAudit={addAudit} />}
           {currentStep === 4 && lease && <Step4 lease={lease} onNext={goNext} addAudit={addAudit} />}
           {currentStep === 5 && lease && <Step5 lease={lease} onNext={goNext} addAudit={addAudit} />}
