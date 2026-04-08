@@ -3,10 +3,9 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import multer from "multer";
 import Anthropic from "@anthropic-ai/sdk";
-import { execSync } from "child_process";
-import { writeFileSync, unlinkSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
+import { createRequire } from "module";
+const require = createRequire(import.meta.url);
+const pdfParse = require("pdf-parse");
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -21,15 +20,12 @@ export async function registerRoutes(
         return res.status(400).json({ success: false, error: "Aucun fichier fourni" });
       }
 
-      // Extract text from PDF using pdftotext system utility
-      const tmpPath = join(tmpdir(), `bail_${Date.now()}.pdf`);
+      // Extract text from PDF using pdf-parse (cross-platform)
       let pdfText: string;
       try {
-        writeFileSync(tmpPath, req.file.buffer);
-        pdfText = execSync(`pdftotext "${tmpPath}" -`, { maxBuffer: 10 * 1024 * 1024 }).toString();
-        unlinkSync(tmpPath);
+        const parsed = await pdfParse(req.file.buffer);
+        pdfText = parsed.text;
       } catch (e) {
-        try { unlinkSync(tmpPath); } catch(_) {}
         return res.status(400).json({ success: false, error: "Impossible de lire le fichier PDF. Vérifiez qu'il s'agit d'un PDF valide." });
       }
 
