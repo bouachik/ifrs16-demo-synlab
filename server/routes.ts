@@ -4,8 +4,13 @@ import { storage } from "./storage";
 import multer from "multer";
 import Anthropic from "@anthropic-ai/sdk";
 import { createRequire } from "module";
-const require = createRequire(import.meta.url);
-const pdfParse = require("pdf-parse");
+// In CJS production bundle (esbuild), import.meta is empty — use __filename instead.
+// In ESM dev (tsx), __filename is undefined — fall back to import.meta.url.
+declare const __filename: string | undefined;
+const _require = createRequire(
+  typeof __filename !== "undefined" ? __filename : import.meta.url
+);
+const pdfParse: (buffer: Buffer) => Promise<{ text: string }> = _require("pdf-parse");
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
